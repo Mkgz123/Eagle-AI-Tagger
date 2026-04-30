@@ -7,10 +7,12 @@ const App = {
     _actions: [],
     _taskItems: [],
     _running: false,
+    /** 拖拽相关状态 */
+    _dragIndex: -1,
     /** 执行时的临时系统提示词（由 system 动作设置） */
     _tempSystemPrompt: null,
 
-    // ========== 动作类型配置（已移除"综合分析"） ==========
+    // ========== 动作类型配置 ==========
     _actionTypes: {
         description: {
             label: '描述生成',
@@ -90,7 +92,6 @@ const App = {
 
     _renderTaskList() {
         const container = document.getElementById('task-list');
-        const countEl = document.getElementById('task-count');
         if (!container) return;
 
         if (this._taskItems.length === 0) {
@@ -99,11 +100,8 @@ const App = {
                     <div class="empty-icon">📌</div>
                     <p>在 Eagle 中选择素材后<br/>将自动显示在此处</p>
                 </div>`;
-            if (countEl) countEl.textContent = '';
             return;
         }
-
-        if (countEl) countEl.textContent = `${this._taskItems.length}`;
 
         let html = '';
         for (const item of this._taskItems) {
@@ -143,7 +141,6 @@ const App = {
     _renderActionPanel() {
         const container = document.getElementById('action-list');
         const footer = document.getElementById('action-footer');
-        const countEl = document.getElementById('action-count');
 
         if (this._actions.length === 0) {
             container.innerHTML = `
@@ -152,7 +149,6 @@ const App = {
                     <span class="hint-text">点击添加动作</span>
                 </div>`;
             footer.classList.add('hidden');
-            if (countEl) countEl.textContent = '';
             setTimeout(() => {
                 const btn = document.getElementById('btn-add-first');
                 if (btn) btn.addEventListener('click', () => this._showAddActionPopup());
@@ -160,7 +156,6 @@ const App = {
             return;
         }
 
-        if (countEl) countEl.textContent = `${this._actions.length}`;
         footer.classList.remove('hidden');
 
         let html = '';
@@ -172,31 +167,50 @@ const App = {
             const isRating = action.type === 'rating';
             const isRename = action.type === 'rename';
             const isFolder = action.type === 'folder';
+            const isDesc = action.type === 'description';
+            const isCollapsed = action._collapsed ? ' collapsed' : '';
 
             html += `
-            <div class="action-card" data-index="${i}">
+            <div class="action-card${isCollapsed}" data-index="${i}"
+                 ondragover="App._onDragOver(event, ${i})"
+                 ondragleave="App._onDragLeave(event, ${i})"
+                 ondrop="App._onDrop(event, ${i})">
                 <div class="action-card-header">
+                    <span class="drag-handle" draggable="true"
+                         ondragstart="App._onDragStart(event, ${i})"
+                         ondragend="App._onDragEnd(event)"
+                         title="拖拽排序">⋮⋮</span>
                     <div class="action-type-icon ${typeCfg.iconClass}">${typeCfg.icon}</div>
-                    <select class="action-type-select" data-index="${i}" onchange="App._onActionTypeChange(${i}, this.value)">
-                        ${Object.entries(this._actionTypes).map(([k, v]) =>
-                            `<option value="${k}" ${k === action.type ? 'selected' : ''}>${v.label}</option>`
-                        ).join('')}
-                    </select>
+                    <span class="action-type-label">${typeCfg.label}</span>
+                    <button class="collapse-toggle" onclick="App._toggleCollapse(${i})" title="展开/收起">${action._collapsed ? '▶' : '▼'}</button>
                     <button class="btn-card-remove" onclick="App._removeAction(${i})" title="移除">✕</button>
                 </div>
                 <div class="action-card-body">`;
 
+            // 描述动作：附加现有描述选项
+            if (isDesc) {
+                const checkedAttr = action.useExistingDesc ? 'checked' : '';
+                html += `
+                    <div class="toggle-field">
+                        <label class="toggle-switch">
+                            <input type="checkbox" data-index="${i}" class="action-use-existing-desc" ${checkedAttr} />
+                            <span class="toggle-track">
+                                <span class="toggle-thumb"></span>
+                            </span>
+                        </label>
+                        <label class="toggle-label-text" for="">将现有描述作为上下文提供给 AI<br/><span style="font-size:10px;color:var(--text-muted);">模型可参考旧描述优化新生成的描述</span></label>
+                    </div>`;
+            }
+
             if (isSystem) {
-                // 系统提示词动作：只有提示词输入框，没有指令
                 html += `
                     <div class="card-field">
                         <label>系统提示词内容</label>
                         <textarea data-index="${i}" class="action-system-prompt" rows="3"
                             placeholder="例如：你是一个专业的视觉内容分析助手...">${Utils.escapeHtml(action.prompt || '')}</textarea>
-                        <div class="help-text">此提示词将在执行时覆盖全局系统提示词，影响后续所有动作</div>
+                        <div class="help-text" style="font-size:10px;color:var(--text-muted);margin-top:4px;">此提示词将在执行时覆盖全局系统提示词，影响后续所有动作</div>
                     </div>`;
             } else {
-                // 其他动作类型：有指令输入框
                 html += `
                     <div class="card-field">
                         <label>指令</label>
@@ -320,6 +334,8 @@ const App = {
             pattern: '',
             folderId: '',
             prompt: '',
+            _collapsed: false,
+            useExistingDesc: false,
         };
         this._actions.push(action);
         this._renderActionPanel();
@@ -330,8 +346,58 @@ const App = {
         this._renderActionPanel();
     },
 
-    _onActionTypeChange(index, newType) {
-        this._actions[index].type = newType;
+    // ========== 拖拽排序 ==========
+
+    _onDragStart(e, index) {
+        this._dragIndex = index;
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(index));
+        // 延迟添加样式，避免拖拽预览受影响
+        setTimeout(() => {
+            const card = document.querySelector(`.action-card[data-index="${index}"]`);
+            if (card) card.classList.add('dragging');
+        }, 0);
+    },
+
+    _onDragOver(e, index) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        if (index === this._dragIndex) return;
+        const card = document.querySelector(`.action-card[data-index="${index}"]`);
+        if (card) card.classList.add('drag-over');
+    },
+
+    _onDragLeave(e, index) {
+        const card = document.querySelector(`.action-card[data-index="${index}"]`);
+        if (card) card.classList.remove('drag-over');
+    },
+
+    _onDrop(e, index) {
+        e.preventDefault();
+        const card = document.querySelector(`.action-card[data-index="${index}"]`);
+        if (card) card.classList.remove('drag-over');
+
+        if (index === this._dragIndex || this._dragIndex < 0) return;
+
+        // 移动数组元素
+        const [moved] = this._actions.splice(this._dragIndex, 1);
+        this._actions.splice(index, 0, moved);
+        this._dragIndex = -1;
+        this._renderActionPanel();
+    },
+
+    _onDragEnd(e) {
+        this._dragIndex = -1;
+        // 清理所有拖拽样式
+        document.querySelectorAll('.action-card.dragging, .action-card.drag-over').forEach((el) => {
+            el.classList.remove('dragging', 'drag-over');
+        });
+    },
+
+    // ========== 折叠/展开 ==========
+
+    _toggleCollapse(index) {
+        this._actions[index]._collapsed = !this._actions[index]._collapsed;
         this._renderActionPanel();
     },
 
@@ -362,6 +428,7 @@ const App = {
             const exclude = document.querySelector(`.action-exclude[data-index="${i}"]`);
             const pattern = document.querySelector(`.action-pattern[data-index="${i}"]`);
             const folder = document.querySelector(`.action-folder[data-index="${i}"]`);
+            const useExistingDesc = document.querySelector(`.action-use-existing-desc[data-index="${i}"]`);
 
             if (instruction) action.instruction = instruction.value;
             if (systemPrompt) action.prompt = systemPrompt.value;
@@ -369,6 +436,7 @@ const App = {
             if (exclude) action.excludeTags = exclude.value.split(',').map((t) => t.trim()).filter(Boolean);
             if (pattern) action.pattern = pattern.value;
             if (folder) action.folderId = folder.value;
+            if (useExistingDesc) action.useExistingDesc = useExistingDesc.checked;
         }
     },
 
@@ -409,8 +477,24 @@ const App = {
             (a.type !== 'rename' || (a.pattern && a.pattern.includes('{ai}')))
         );
         if (needsAI && !AIService.hasModel()) {
-            UI.showToast('请先在设置中配置 AI 模型', 'warning');
+            const isCustom = SettingsStore.get('apiMode') === 'custom';
+            UI.showToast(
+                isCustom ? '请先在设置中配置自定义 API 地址和模型' : '请先在 Eagle 设置中配置 AI 模型（设置 → AI 模型）',
+                'warning'
+            );
             return;
+        }
+
+        // === AI 连通性预检 ===
+        if (needsAI) {
+            UI.setStatus('正在检查 AI 连通性...');
+            const testResult = await AIService.testConnection();
+            if (!testResult.ok) {
+                UI.showToast('AI 连接失败: ' + testResult.error, 'error');
+                UI.setStatus('AI 连接失败');
+                return;
+            }
+            UI.setStatus('AI 连接正常');
         }
 
         this._running = true;
@@ -421,12 +505,20 @@ const App = {
 
         const totalItems = taskItems.length;
         let globalIndex = 0;
+        let errorCount = 0;
+        let lastError = null;
 
         try {
             // 先处理文件夹动作
             for (const action of this._actions) {
                 if (action.type !== 'folder') continue;
-                await this._executeSingleAction(action, null, 0, 1);
+                try {
+                    await this._executeSingleAction(action, null, 0, 1);
+                } catch (e) {
+                    errorCount++;
+                    lastError = e;
+                    console.error('文件夹动作失败:', e);
+                }
             }
 
             // 处理素材动作
@@ -434,6 +526,7 @@ const App = {
                 for (let i = 0; i < taskItems.length; i++) {
                     const item = taskItems[i];
                     this._updateTaskItem(item.id, 'running', 0);
+                    let itemHadError = false;
 
                     for (const action of this._actions) {
                         if (action.type === 'folder') continue;
@@ -443,21 +536,39 @@ const App = {
                                 : null;
                             await this._executeSingleAction(action, freshItem, i, totalItems);
                         } catch (e) {
+                            itemHadError = true;
+                            errorCount++;
+                            lastError = e;
+                            const errMsg = AIService.formatError(e);
                             console.error(`动作执行失败 [${item.name}]:`, e);
+                            // 只对前 3 个错误弹出 toast，避免刷屏
+                            if (errorCount <= 3) {
+                                UI.showToast(`${item.name}: ${errMsg}`, 'error', 5000);
+                            }
                         }
                     }
 
-                    this._updateTaskItem(item.id, 'done', 100);
+                    this._updateTaskItem(item.id, itemHadError ? 'error' : 'done', 100);
                     globalIndex++;
                     this._updateOverallProgress(Math.round((globalIndex / totalItems) * 100));
                 }
             }
 
-            UI.showToast('全部动作执行完成', 'success');
-            UI.setStatus('就绪');
+            // 汇总结果
+            if (errorCount > 0) {
+                const msg = totalItems > 0
+                    ? `${totalItems} 个素材处理完成，${errorCount} 个动作失败`
+                    : `${errorCount} 个动作执行失败`;
+                UI.showToast(msg, errorCount === this._actions.length * totalItems ? 'error' : 'warning', 5000);
+                UI.setStatus(`完成 (${errorCount} 个错误)`);
+            } else {
+                UI.showToast('全部动作执行完成', 'success');
+                UI.setStatus('就绪');
+            }
         } catch (e) {
             console.error('执行失败:', e);
             UI.showToast('执行出错: ' + (e.message || '未知错误'), 'error');
+            UI.setStatus('执行出错');
         } finally {
             this._running = false;
             this._tempSystemPrompt = null;
@@ -474,14 +585,13 @@ const App = {
     async _executeSingleAction(action, item, itemIndex, totalItems) {
         switch (action.type) {
             case 'system': {
-                // 系统提示词动作：设置临时提示词，影响后续动作
                 this._tempSystemPrompt = action.prompt || '';
                 break;
             }
             case 'description': {
                 if (!item) return;
                 const sp = this._getEffectiveSystemPrompt();
-                const desc = await AIService.generateDescription(item, action.instruction, sp);
+                const desc = await AIService.generateDescription(item, action.instruction, sp, action.useExistingDesc);
                 await ItemService.updateAnnotation(item, desc, action.mode || 'overwrite');
                 break;
             }
@@ -549,7 +659,6 @@ const App = {
             return;
         }
 
-        // 生成动作摘要用于列表展示
         const summary = this._actions
             .map((a) => (this._actionTypes[a.type]?.label || a.type))
             .join(' + ');
@@ -571,7 +680,6 @@ const App = {
             const name = document.getElementById('tpl-save-name').value.trim();
             if (!name) { UI.showToast('请输入模板名称', 'warning'); return; }
 
-            // 存储完整动作列表为 _actions，instruction 作为概要
             TemplateStore.create({
                 name,
                 actionType: this._actions.length === 1 ? this._actions[0].type : 'mixed',
@@ -631,6 +739,8 @@ const App = {
                 pattern: '',
                 folderId: '',
                 prompt: '',
+                _collapsed: false,
+                useExistingDesc: false,
             }];
         }
 
@@ -654,7 +764,7 @@ const App = {
                 TemplateStore.delete(templateId);
                 UI.closeModal();
                 this._renderTemplateBar();
-                this._loadTemplate(); // 刷新已打开的模态框
+                this._loadTemplate();
                 UI.showToast('模板已删除', 'info');
             } catch (e) {
                 UI.showToast('删除失败: ' + e.message, 'error');
@@ -693,18 +803,56 @@ const App = {
         const defaultLLM = AIService.isReady() ? AIService._ai?.getDefaultModel('chat') || '未配置' : '不可用';
         const defaultVLM = AIService.isReady() ? AIService._ai?.getDefaultModel('image') || '未配置' : '不可用';
 
+        const isCustom = settings.apiMode === 'custom';
+
         const bodyHtml = `
             <div class="settings-section">
-                <h4>AI 模型</h4>
-                <div class="info-box ${hasModel ? 'info-box-info' : 'info-box-warning'}" style="margin-bottom:10px;">
-                    ${hasModel ? '✅ AI 模型已配置' : '⚠ 未配置 AI 模型'}
+                <h4>API 模式</h4>
+                <div class="settings-field">
+                    <select id="s-api-mode" style="width:100%;">
+                        <option value="sdk" ${!isCustom ? 'selected' : ''}>Eagle AI SDK（官方套件）</option>
+                        <option value="custom" ${isCustom ? 'selected' : ''}>自定义 API（OpenAI 兼容）</option>
+                    </select>
                 </div>
-                <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">
-                    语言模型: ${defaultLLM}<br/>视觉模型: ${defaultVLM}
+            </div>
+
+            <div id="s-custom-section" style="display:${isCustom ? 'block' : 'none'};">
+                <div class="settings-section">
+                    <h4>自定义 API 配置</h4>
+                    <div class="settings-field">
+                        <label>API 地址（OpenAI 兼容端点）</label>
+                        <input type="text" id="s-custom-url" value="${Utils.escapeHtml(settings.customBaseUrl || '')}"
+                            placeholder="例如：http://localhost:1234/v1（LM Studio 默认端口）" />
+                    </div>
+                    <div class="settings-field">
+                        <label>模型名称</label>
+                        <input type="text" id="s-custom-model" value="${Utils.escapeHtml(settings.customModel || '')}"
+                            placeholder="例如：qwen3-vl-8b（需与本地加载的模型名一致）" />
+                    </div>
+                    <div class="settings-field">
+                        <label>API Key（可选，本地模型通常无需填写）</label>
+                        <input type="text" id="s-custom-key" value="${Utils.escapeHtml(settings.customApiKey || '')}"
+                            placeholder="如不需要可留空" />
+                    </div>
+                    <div style="font-size:10px;color:var(--text-muted);margin-top:4px;">
+                        支持 LM Studio (localhost:1234/v1)、Ollama (localhost:11434/v1) 及任何 OpenAI 兼容服务
+                    </div>
                 </div>
-                <div style="display:flex;gap:8px;">
-                    <button class="btn btn-sm btn-outline" id="s-open-ai">打开 AI 设置</button>
-                    <button class="btn btn-sm btn-outline" id="s-reload-ai">刷新模型</button>
+            </div>
+
+            <div id="s-sdk-section" style="display:${!isCustom ? 'block' : 'none'};">
+                <div class="settings-section">
+                    <h4>AI 模型</h4>
+                    <div class="info-box ${hasModel ? 'info-box-info' : 'info-box-warning'}" style="margin-bottom:10px;">
+                        ${hasModel ? '✅ AI 模型已配置' : '⚠ 未配置 AI 模型'}
+                    </div>
+                    <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;">
+                        语言模型: ${defaultLLM}<br/>视觉模型: ${defaultVLM}
+                    </div>
+                    <div style="display:flex;gap:8px;">
+                        <button class="btn btn-sm btn-outline" id="s-open-ai">打开 AI 设置</button>
+                        <button class="btn btn-sm btn-outline" id="s-reload-ai">刷新模型</button>
+                    </div>
                 </div>
             </div>
 
@@ -713,7 +861,7 @@ const App = {
                 <div class="settings-field">
                     <textarea id="s-system-prompt" rows="3" placeholder="例如：你是一个专业的视觉内容分析助手...">${Utils.escapeHtml(settings.globalSystemPrompt || '')}</textarea>
                 </div>
-                <div class="help-text">此提示词将用于所有未设置"系统提示词"动作的 AI 调用。可使用"系统提示词"动作在模板中覆盖此项。</div>
+                <div style="font-size:10px;color:var(--text-muted);">此提示词将用于所有未设置"系统提示词"动作的 AI 调用。可使用"系统提示词"动作在模板中覆盖此项。</div>
             </div>
 
             <div class="settings-section">
@@ -726,7 +874,7 @@ const App = {
 
             <div class="settings-section">
                 <h4>默认设置</h4>
-                <div class="card-field-row" style="display:flex;gap:10px;">
+                <div style="display:flex;gap:10px;">
                     <div class="settings-field" style="flex:1;">
                         <label>描述写入模式</label>
                         <select id="s-desc-mode">
@@ -752,6 +900,18 @@ const App = {
         `);
 
         setTimeout(() => {
+            // API 模式切换
+            const apiModeSel = document.getElementById('s-api-mode');
+            const customSection = document.getElementById('s-custom-section');
+            const sdkSection = document.getElementById('s-sdk-section');
+            if (apiModeSel) {
+                apiModeSel.addEventListener('change', () => {
+                    const isCustomMode = apiModeSel.value === 'custom';
+                    if (customSection) customSection.style.display = isCustomMode ? 'block' : 'none';
+                    if (sdkSection) sdkSection.style.display = isCustomMode ? 'none' : 'block';
+                });
+            }
+
             document.getElementById('s-open-ai')?.addEventListener('click', () => AIService.openSettings());
             document.getElementById('s-reload-ai')?.addEventListener('click', () => {
                 AIService.reload();
@@ -766,6 +926,10 @@ const App = {
             });
             document.getElementById('s-save')?.addEventListener('click', () => {
                 SettingsStore.update({
+                    apiMode: document.getElementById('s-api-mode')?.value || 'sdk',
+                    customBaseUrl: document.getElementById('s-custom-url')?.value || '',
+                    customApiKey: document.getElementById('s-custom-key')?.value || '',
+                    customModel: document.getElementById('s-custom-model')?.value || '',
                     globalSystemPrompt: document.getElementById('s-system-prompt')?.value || '',
                     excludeTags: (document.getElementById('s-exclude-tags')?.value || '')
                         .split(',').map((t) => t.trim()).filter(Boolean),

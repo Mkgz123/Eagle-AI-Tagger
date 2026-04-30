@@ -18,6 +18,11 @@ const SettingsStore = {
         ratingThreshold: 3,
         language: 'zh',
         lastRenamePattern: '',
+        // 自定义 API
+        apiMode: 'sdk',
+        customBaseUrl: 'http://localhost:1234/v1',
+        customApiKey: '',
+        customModel: '',
     },
 
     init(pluginPath) {
