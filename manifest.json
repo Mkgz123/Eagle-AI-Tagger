@@ -1,0 +1,20 @@
+{
+    "id": "d11a6ded-6fcc-41f4-b863-6f3eb7c3f369",
+    "version": "1.0.0",
+    "platform": "all",
+    "arch": "all",
+    "name": "AI Tagger",
+    "logo": "/logo.png",
+    "keywords": ["ai", "tag", "description", "rating"],
+    "dependencies": ["ai-sdk"],
+    "devTools": false,
+    "main": {
+        "frame": false,
+        "url": "index.html",
+        "width": 1050,
+        "height": 720,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true
+    }
+}
