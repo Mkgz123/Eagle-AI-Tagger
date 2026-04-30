@@ -13,7 +13,10 @@ const TemplateStore = {
         DESCRIPTION: 'description',
         TAGS: 'tags',
         RATING: 'rating',
-        COMPREHENSIVE: 'comprehensive',
+        SYSTEM: 'system',
+        FOLDER: 'folder',
+        RENAME: 'rename',
+        MIXED: 'mixed',
     },
 
     /**
@@ -67,40 +70,30 @@ const TemplateStore = {
         return [
             {
                 id: Utils.uid(),
-                name: '通用描述生成',
+                name: '描述',
                 actionType: 'description',
-                instruction: '请用简洁的中文描述这张图片的内容、风格和主要视觉元素。描述控制在100字以内。',
-                systemPrompt: '你是一个专业的视觉内容分析助手，擅长准确地描述图像内容。',
+                instruction: '请用简洁的中文描述这张图片的内容、风格和主要视觉元素。',
+                systemPrompt: '',
                 overwriteMode: 'overwrite',
                 createdAt: Date.now(),
                 updatedAt: Date.now(),
             },
             {
                 id: Utils.uid(),
-                name: '关键词标签生成',
+                name: '标签',
                 actionType: 'tags',
-                instruction: '请为这张图片生成5-10个标签，标签应涵盖：内容主题、视觉风格、色彩方案、构图类型。标签使用中文，每个标签2-4个字。',
-                systemPrompt: '你是一个专业的图像标签分类专家，擅长提取图像的关键特征并生成精准标签。',
+                instruction: '请为这张图片生成5-10个精准的中文标签。',
+                systemPrompt: '',
                 overwriteMode: 'merge',
                 createdAt: Date.now(),
                 updatedAt: Date.now(),
             },
             {
                 id: Utils.uid(),
-                name: '质量评分',
+                name: '评分',
                 actionType: 'rating',
-                instruction: '请从构图、色彩、创意、技术质量四个维度评估这张图片，给出1-5星的综合评分。',
-                systemPrompt: '你是一个专业的视觉作品评审专家，严格按照专业标准进行评分。',
-                overwriteMode: 'overwrite',
-                createdAt: Date.now(),
-                updatedAt: Date.now(),
-            },
-            {
-                id: Utils.uid(),
-                name: '综合标注',
-                actionType: 'comprehensive',
-                instruction: '请对这张图片进行全面分析，包括：1)内容描述 2)风格标签 3)质量评分(1-5)。',
-                systemPrompt: '你是一个全能型的视觉内容分析专家。',
+                instruction: '请从构图、色彩、创意、技术质量四个维度评估，给出1-5星评分。',
+                systemPrompt: '',
                 overwriteMode: 'overwrite',
                 createdAt: Date.now(),
                 updatedAt: Date.now(),
@@ -136,10 +129,11 @@ const TemplateStore = {
         const template = {
             id: Utils.uid(),
             name: data.name || '未命名模板',
-            actionType: data.actionType || 'comprehensive',
+            actionType: data.actionType || 'description',
             instruction: data.instruction || '',
             systemPrompt: data.systemPrompt || '',
             overwriteMode: data.overwriteMode || 'overwrite',
+            _actions: data._actions || null,
             createdAt: Date.now(),
             updatedAt: Date.now(),
         };
@@ -181,10 +175,13 @@ const TemplateStore = {
      */
     getActionTypeLabel(type) {
         const map = {
-            description: '描述生成',
-            tags: '标签生成',
+            description: '描述',
+            tags: '标签',
             rating: '评分',
-            comprehensive: '综合分析',
+            system: '提示词',
+            folder: '文件夹',
+            rename: '重命名',
+            mixed: '组合',
         };
         return map[type] || type;
     },

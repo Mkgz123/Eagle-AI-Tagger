@@ -1,6 +1,6 @@
 /* ============================================================
    settings-store.js - 全局设置持久化
-   存储位置：插件目录/data/settings.json
+   存储位置：优先插件目录/data/settings.json，失败时回退到临时目录
    ============================================================ */
 
 const SettingsStore = {
@@ -8,49 +8,73 @@ const SettingsStore = {
     _filePath: null,
     _fs: null,
 
-    /** 默认设置 */
     _defaults: {
         globalSystemPrompt: '',
-        defaultAction: 'comprehensive',
+        defaultAction: 'description',
         excludeTags: [],
         autoCleanTags: false,
-        tagOverwriteMode: 'merge',    // 'merge' | 'replace'
-        descOverwriteMode: 'overwrite', // 'overwrite' | 'append'
+        tagOverwriteMode: 'merge',
+        descOverwriteMode: 'overwrite',
         ratingThreshold: 3,
         language: 'zh',
+        lastRenamePattern: '',
     },
 
-    /**
-     * 初始化 - 在 plugin.js onPluginCreate 中调用
-     */
     init(pluginPath) {
         this._fs = require('fs');
         const path = require('path');
-        this._filePath = path.join(pluginPath, 'data', 'settings.json');
+
+        // 主路径：插件目录
+        const primaryPath = path.join(pluginPath, 'data', 'settings.json');
+
+        // 尝试主路径
+        try {
+            const dir = path.dirname(primaryPath);
+            if (!this._fs.existsSync(dir)) {
+                this._fs.mkdirSync(dir, { recursive: true });
+            }
+            // 测试写入权限
+            this._fs.writeFileSync(path.join(dir, '.write_test'), 'ok', 'utf-8');
+            this._fs.unlinkSync(path.join(dir, '.write_test'));
+            this._filePath = primaryPath;
+        } catch (e) {
+            // 回退到系统临时目录
+            try {
+                const tmpdir = require('os').tmpdir();
+                const fallbackDir = path.join(tmpdir, 'eagle-ai-tagger');
+                if (!this._fs.existsSync(fallbackDir)) {
+                    this._fs.mkdirSync(fallbackDir, { recursive: true });
+                }
+                this._filePath = path.join(fallbackDir, 'settings.json');
+                console.warn('设置存储回退到临时目录:', this._filePath);
+            } catch (e2) {
+                console.error('无法创建设置存储路径:', e2);
+                this._data = { ...this._defaults };
+                return;
+            }
+        }
+
         this._load();
     },
 
-    /**
-     * 从文件加载设置
-     */
     _load() {
         try {
             if (this._fs.existsSync(this._filePath)) {
                 const raw = this._fs.readFileSync(this._filePath, 'utf-8');
-                this._data = { ...this._defaults, ...JSON.parse(raw) };
+                const parsed = JSON.parse(raw);
+                // 合并默认值，确保新字段有默认值
+                this._data = { ...this._defaults, ...parsed };
             } else {
                 this._data = { ...this._defaults };
                 this._save();
             }
+            console.log('设置已加载:', this._filePath);
         } catch (e) {
             console.error('加载设置失败:', e);
             this._data = { ...this._defaults };
         }
     },
 
-    /**
-     * 保存设置到文件
-     */
     _save() {
         try {
             const dir = require('path').dirname(this._filePath);
@@ -58,60 +82,40 @@ const SettingsStore = {
                 this._fs.mkdirSync(dir, { recursive: true });
             }
             this._fs.writeFileSync(this._filePath, JSON.stringify(this._data, null, 2), 'utf-8');
+            console.log('设置已保存:', this._filePath);
         } catch (e) {
-            console.error('保存设置失败:', e);
+            console.error('保存设置失败:', e.message);
             throw new Error('保存设置失败: ' + e.message);
         }
     },
 
-    /**
-     * 获取所有设置
-     */
     getAll() {
         return { ...this._data };
     },
 
-    /**
-     * 获取单个设置项
-     */
     get(key) {
         return this._data[key] !== undefined ? this._data[key] : this._defaults[key];
     },
 
-    /**
-     * 设置单个设置项并保存
-     */
     set(key, value) {
         this._data[key] = value;
         this._save();
     },
 
-    /**
-     * 批量更新设置并保存
-     */
     update(partial) {
         Object.assign(this._data, partial);
         this._save();
     },
 
-    /**
-     * 重置为默认设置
-     */
     reset() {
         this._data = { ...this._defaults };
         this._save();
     },
 
-    /**
-     * 获取全局系统提示词
-     */
     getGlobalSystemPrompt() {
         return this._data.globalSystemPrompt || '';
     },
 
-    /**
-     * 获取排除标签列表
-     */
     getExcludeTags() {
         return this._data.excludeTags || [];
     },
